@@ -34,7 +34,7 @@ policy() {
 }
 
 wrap() {
-  ( cd "$TMP" && OSTRIUM_PODMAN_POLICY=$TMP/policy.conf PODMAN_BIN=$TMP/bin/podman "$WRAPPER" "$@" )
+  ( cd "$TMP/work" && OSTRIUM_PODMAN_POLICY=$TMP/policy.conf PODMAN_BIN=$TMP/bin/podman "$WRAPPER" "$@" )
 }
 
 ok() {
@@ -95,8 +95,8 @@ no "compute compose"                compute compose up -d
 no "compute build"                  compute build -t app .
 no "volume driver binds host"       dev volume create -o device=/etc -o type=none -o o=bind etc
 no "build --file outside"           dev build --file=/etc/passwd .
-no "build --file outside (short)"   dev build -f ../../etc/passwd .
-no "build context outside"          dev build ../..
+no "build --file outside (short)"   dev build -f /etc/passwd .
+no "build context outside"          dev build /etc
 no "compute resource override"      compute run --memory=8g ghcr.io/ostrium-labs/worker@sha256:deadbeef
 no "compute short memory override"  compute run -m8g ghcr.io/ostrium-labs/worker@sha256:deadbeef
 no "compute cgroup override"        compute run --cgroup-conf memory.max=8g ghcr.io/ostrium-labs/worker@sha256:deadbeef
