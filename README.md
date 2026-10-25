@@ -11,7 +11,16 @@ through a deny-by-default wrapper:
 
 Every variant has qcow2, raw and ISO outputs for `x86_64-linux` and
 `aarch64-linux`. CI builds x86 qcow2 and ISO plus arm ISO, emits an SPDX SBOM
-and attests provenance.
+and attests provenance. Pushing a `v*` tag publishes them as a
+[GitHub release](https://github.com/ostrium-labs/ostrium-linux/releases) with
+`SHA256SUMS`. qcow2 images are shipped compressed; files over GitHub's 2 GiB
+asset limit are split into `.partNN` pieces:
+
+```bash
+cat ostrium-linux-compute-x86_64-linux.qcow2.part* > ostrium-linux-compute-x86_64-linux.qcow2
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify ostrium-linux-compute-x86_64-linux.qcow2 -R ostrium-labs/ostrium-linux
+```
 
 ```bash
 nix build .#packages.x86_64-linux.compute-qcow2 -L
@@ -39,21 +48,26 @@ That turns on OpenSSH with password and root logins disabled.
 
 ---
 
-## Why NixOS, not CachyOS or Omarchy
+## Which OS to run where
 
-| | **NixOS (chosen)** | CachyOS | Omarchy |
-|---|---|---|---|
-| Kernel | mainline from nixpkgs-unstable; LTS/latest/testing selectable | Cachy-patched (BORE/sched-ext), not mainline | Arch kernel |
-| ARM | first-class `aarch64-linux` | no (x86-only tuning) | no |
-| x86-64-v3/v4 | `nixpkgs.hostPlatform.gcc.arch`, a build flag | its main selling point | yes (Arch) |
-| Reproducibility | `flake.lock` pins every input | rolling pacman | rolling pacman + dotfiles |
-| Hardening | declarative, reviewable, diffable | manual drift | manual, desktop-oriented |
-| Supply chain | pinned nixpkgs, signed store paths, sandboxed builds | AUR build scripts | AUR |
-| Image output | ISO, qcow2, raw from one config | manual | manual |
+**Workstation or laptop: go with [CachyOS](https://cachyos.org).** These
+images are headless servers and VMs. On a machine you sit in front of, CachyOS
+gives you a tuned desktop kernel (BORE/sched-ext), x86-64-v3/v4 packages and a
+proper graphical install, which is the right trade-off for interactive use.
+Integration with the **Omarchy Linux SDK** is planned for the workstation side.
 
-CachyOS optimizations are compiler flags and a patched scheduler; NixOS exposes
-both without inheriting a rolling Arch base or losing ARM. Omarchy is an
-opinionated Arch + Hyprland desktop — the wrong shape for a host with no GUI.
+**Servers, VMs and CI: use these NixOS images.**
+
+| | **NixOS (these images)** | CachyOS (workstation/laptop) |
+|---|---|---|
+| Target | headless dev, compute, storage hosts | desktop and laptop |
+| Kernel | mainline from nixpkgs-unstable; LTS/latest/testing selectable | Cachy-patched (BORE/sched-ext) |
+| ARM | first-class `aarch64-linux` | no (x86-only tuning) |
+| x86-64-v3/v4 | `nixpkgs.hostPlatform.gcc.arch`, a build flag | its main selling point |
+| Reproducibility | `flake.lock` pins every input | rolling pacman |
+| Hardening | declarative, reviewable, diffable | desktop defaults |
+| Image output | ISO, qcow2, raw from one config | installer ISO |
+| Omarchy Linux SDK | not planned | planned |
 
 ISA tuning stays a build flag:
 

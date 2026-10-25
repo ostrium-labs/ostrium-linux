@@ -90,14 +90,20 @@ jobs:
           nix shell --inputs-from . nixpkgs#syft -c
           syft scan dir:result -o spdx-json > sbom.json
       - name: Collect artifact
+        env:
+          BASE: ostrium-linux-${{ matrix.variant }}-${{ matrix.arch }}
         run: |
           mkdir -p out
           if [ "${{ matrix.format }}" = iso ]; then
-            cp result/iso/*.iso out/
+            cp result/iso/*.iso "out/$BASE.iso"
           else
-            cp result/nixos.${{ matrix.format }} out/
+            # make-disk-image writes an uncompressed qcow2; compress it so the
+            # release asset stays small (it is still a bootable qcow2).
+            nix shell --inputs-from . nixpkgs#qemu-utils -c \
+              qemu-img convert -c -O qcow2 "result/nixos.${{ matrix.format }}" "out/$BASE.${{ matrix.format }}"
           fi
-          cp sbom.json out/
+          cp sbom.json "out/$BASE-${{ matrix.format }}.spdx.json"
+          ls -l out
       - name: Attest provenance
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
@@ -108,3 +114,39 @@ jobs:
           path: out/*
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Split assets over the 2 GiB limit
+        working-directory: dist
+        run: |
+          for f in *; do
+            if [ "$(stat -c %s "$f")" -gt 2000000000 ]; then
+              split -b 1900M -d -a 2 "$f" "$f.part"
+              sha256sum "$f" >> SHA256SUMS.full
+              rm "$f"
+            fi
+          done
+          sha256sum -- * | grep -v ' SHA256SUMS' > ../SHA256SUMS
+          [ -f SHA256SUMS.full ] && cat SHA256SUMS.full >> ../SHA256SUMS && rm SHA256SUMS.full
+          mv ../SHA256SUMS .
+          ls -l
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "${{ github.repository }}" \
+            --title "ostrium-linux $TAG" \
+            --generate-notes \
+            --verify-tag
