@@ -1,0 +1,30 @@
+# Example stack the desktop app can bring up with:
+#   podman-compose -f /etc/ostrium/dev-compose.yaml up -d
+#
+# The dev policy allows named volumes, workspace bind mounts, env vars and
+# compose-created networks. It still refuses privileged mode, devices,
+# capabilities, host namespaces and SSH/GPG material.
+name: ostrium-dev
+services:
+  postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_USER: ostrium
+      POSTGRES_PASSWORD: ostrium
+      POSTGRES_DB: ostrium
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ostrium"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: docker.io/library/redis:7
+    ports:
+      - "127.0.0.1:6379:6379"
+
+volumes:
+  pgdata: {}

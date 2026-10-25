@@ -1,0 +1,14 @@
+{
+  "default": [{ "type": "reject" }],
+  "transports": {
+    "docker": {
+      "ghcr.io/ostrium-labs": [
+        { "type": "sigstoreSigned", "keyPath": "/etc/ostrium/cosign.pub" }
+      ],
+      "docker.io/library": [{ "type": "insecureAcceptAnything" }],
+      "quay.io": [{ "type": "insecureAcceptAnything" }],
+      "registry.fedoraproject.org": [{ "type": "insecureAcceptAnything" }],
+      "gcr.io/distroless": [{ "type": "insecureAcceptAnything" }]
+    }
+  }
+}

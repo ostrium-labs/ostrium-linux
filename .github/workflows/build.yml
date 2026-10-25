@@ -1,0 +1,109 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  flake-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
+      # Evaluate every output (both architectures) without building the
+      # systems twice; the image jobs below do the real builds.
+      - run: nix flake check --no-build --all-systems -L
+
+  image:
+    needs: flake-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # qcow2/raw go through make-disk-image, which runs a KVM guest.
+          # GitHub-hosted x86 runners expose /dev/kvm; the arm runners do not,
+          # so arm images are published as ISO (build them on a KVM-capable
+          # arm64 host if you need arm qcow2).
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            variant: dev
+            format: qcow2
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            variant: compute
+            format: qcow2
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            variant: storage
+            format: qcow2
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            variant: dev
+            format: iso
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            variant: compute
+            format: iso
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            variant: storage
+            format: iso
+          - runner: ubuntu-24.04-arm
+            arch: aarch64-linux
+            variant: dev
+            format: iso
+          - runner: ubuntu-24.04-arm
+            arch: aarch64-linux
+            variant: compute
+            format: iso
+          - runner: ubuntu-24.04-arm
+            arch: aarch64-linux
+            variant: storage
+            format: iso
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            sandbox = true
+      - name: Build ${{ matrix.format }}
+        run: nix build ".#packages.${{ matrix.arch }}.${{ matrix.variant }}-${{ matrix.format }}" -L --out-link result
+      - name: SBOM
+        run: >-
+          nix shell --inputs-from . nixpkgs#syft -c
+          syft scan dir:result -o spdx-json > sbom.json
+      - name: Collect artifact
+        run: |
+          mkdir -p out
+          if [ "${{ matrix.format }}" = iso ]; then
+            cp result/iso/*.iso out/
+          else
+            cp result/nixos.${{ matrix.format }} out/
+          fi
+          cp sbom.json out/
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: out/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ostrium-linux-${{ matrix.variant }}-${{ matrix.arch }}-${{ matrix.format }}
+          path: out/*
+          if-no-files-found: error
+          retention-days: 14

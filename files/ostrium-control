@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# ostrium-linux control panel: kernel snapshots, containers, storage, system.
+set -uo pipefail
+
+VARIANT=$(cat /etc/ostrium/variant 2>/dev/null || echo unknown)
+MAP=/etc/ostrium/kernel-map.json
+
+pause() {
+  read -rp "press enter to continue " _ || true
+}
+
+kernel_menu() {
+  local choices
+  choices=$(jq -r '.choices | length' "$MAP" 2>/dev/null || echo 0)
+  if [ "${choices:-0}" -lt 2 ]; then
+    echo "Only one kernel is baked into this image."
+    pause
+    return
+  fi
+  echo "Kernel snapshots"
+  ostrium-kernel list
+  echo
+  echo "current: $(sudo ostrium-kernel current 2>/dev/null || echo unknown)"
+  echo
+  read -rp "switch to [lts/latest/testing] (empty cancels): " k || true
+  if [ -n "${k:-}" ]; then
+    sudo ostrium-kernel set "$k"
+  fi
+  pause
+}
+
+containers_menu() {
+  echo "Containers"
+  podman ps -a || true
+  echo
+  podman images || true
+  echo
+  read -rp "prune unused images? [y/N] " p || true
+  if [ "${p:-}" = y ]; then
+    podman image prune -f || true
+  fi
+  pause
+}
+
+storage_menu() {
+  echo "Storage"
+  df -h / /srv/data 2>/dev/null || df -h /
+  if command -v btrfs >/dev/null 2>&1; then
+    btrfs filesystem usage /home/ostrium/.local/share/containers 2>/dev/null || true
+    btrfs scrub status /home/ostrium/.local/share/containers 2>/dev/null || true
+  fi
+  if systemctl list-unit-files rustfs.service >/dev/null 2>&1; then
+    echo
+    systemctl is-active rustfs || true
+    systemctl status rustfs --no-pager -n 5 || true
+  fi
+  pause
+}
+
+system_menu() {
+  echo "System"
+  nixos-version 2>/dev/null || true
+  uptime
+  echo
+  systemctl --failed --no-pager || true
+  echo
+  read -rp "reboot now? [y/N] " r || true
+  if [ "${r:-}" = y ]; then
+    sudo systemctl reboot
+  fi
+  pause
+}
+
+while true; do
+  printf '\033c'
+  echo "ostrium-linux control panel"
+  echo "host: $(cat /etc/hostname 2>/dev/null || echo unknown)   image: $VARIANT"
+  echo
+  echo "  1) kernel"
+  echo "  2) containers"
+  echo "  3) storage"
+  echo "  4) system"
+  echo "  q) quit"
+  echo
+  read -rp "> " choice || exit 0
+  case ${choice:-} in
+    1) kernel_menu ;;
+    2) containers_menu ;;
+    3) storage_menu ;;
+    4) system_menu ;;
+    q | Q) exit 0 ;;
+    *) ;;
+  esac
+done

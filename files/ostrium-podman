@@ -1,0 +1,398 @@
+#!/usr/bin/env bash
+# ostrium-podman — rootless Podman with a per-variant, deny-by-default policy.
+#
+# MODE=dev      workspace-scoped bind mounts, env, compose, tags, writable rootfs
+# MODE=compute  no mounts, no env, no state subcommands, digest-only, read-only
+# MODE=storage  only /srv/data mounts, everything else like compute
+#
+# Always refused: privileged mode, devices, capabilities, host namespaces,
+# security-opt overrides, SSH/GPG keys, docker/podman sockets, secret injection.
+set -euo pipefail
+
+MODE=compute
+WORKSPACE=/nonexistent
+POLICY_FILE=${OSTRIUM_PODMAN_POLICY:-/etc/ostrium/podman-policy.conf}
+if [[ -r $POLICY_FILE ]]; then
+  . "$POLICY_FILE"
+fi
+
+unset CONTAINER_HOST CONTAINER_CONNECTION DOCKER_HOST PODMAN_CONNECTIONS_CONF
+
+PROG=${0##*/}
+PODMAN_BIN=${PODMAN_BIN:-podman}
+
+die() { printf '%s: refused: %s\n' "$PROG" "$*" >&2; exit 64; }
+note() { printf '%s: %s\n' "$PROG" "$*" >&2; }
+
+case $MODE in
+  dev | compute | storage) ;;
+  *) die "invalid MODE '$MODE' in /etc/ostrium/podman-policy.conf" ;;
+esac
+
+is_dev() { [[ $MODE == dev ]]; }
+is_storage() { [[ $MODE == storage ]]; }
+
+ALLOWED_REGISTRIES=(
+  "ghcr.io/ostrium-labs/"
+  "docker.io/library/"
+  "quay.io/"
+  "registry.fedoraproject.org/"
+  "gcr.io/distroless/"
+)
+
+# docker.io/library/postgres:16 for "postgres:16" and "library/postgres:16".
+norm_image() {
+  local ref=${1%%@*} first
+  if [[ $ref != */* ]]; then
+    printf 'docker.io/library/%s' "$ref"
+    return
+  fi
+  first=${ref%%/*}
+  if [[ $first != *.* && $first != *:* && $first != localhost ]]; then
+    printf 'docker.io/%s' "$ref"
+  else
+    printf '%s' "$ref"
+  fi
+}
+
+registry_ok() {
+  local base r
+  base=$(norm_image "$1")
+  for r in "${ALLOWED_REGISTRIES[@]}"; do
+    [[ $base == "$r"* ]] && return 0
+  done
+  return 1
+}
+
+check_env_file() {
+  local p=$1 real
+  if is_dev; then
+    [[ $p == /* ]] || return 0
+    real=$(realpath -m -- "$p")
+    [[ $real == "$WORKSPACE" || $real == "$WORKSPACE"/* ]] \
+      || die "env file outside $WORKSPACE: $p"
+  else
+    [[ $p == /etc/ostrium/env/* || $p == /run/ostrium/env/* ]] \
+      || die "env files are only read from /etc/ostrium/env on the $MODE image"
+  fi
+}
+
+check_volume() {
+  local spec=$1 src real
+  # tmpfs mounts never touch the host filesystem.
+  [[ $spec == type=tmpfs* ]] && return 0
+  if [[ $spec == *type=bind* || $spec == *type=volume* ]]; then
+    src=$(printf '%s' "$spec" | tr ',' '\n' | sed -n 's/^\(src\|source\)=//p' | head -1)
+  fi
+  [[ -n ${src:-} ]] || src=${spec%%:*}
+  [[ -n $src ]] || return 0
+
+  case $src in
+    *.ssh* | *.gnupg* | *id_rsa* | *id_ed25519* | *id_ecdsa* | *.sock* | *SSH_AUTH_SOCK*)
+      die "key or socket path in volume: $src"
+      ;;
+  esac
+
+  if [[ $src != /* && $src == .* ]]; then
+    src=$(realpath -m -- "$src")
+  fi
+
+  if [[ $src == /* ]]; then
+    real=$(realpath -m -- "$src")
+    [[ $real == "$WORKSPACE" || $real == "$WORKSPACE"/* ]] \
+      || die "bind mount outside $WORKSPACE: $src"
+    [[ -e $real ]] || die "bind source does not exist: $src"
+  else
+    is_dev || die "named volumes are refused on the $MODE image: $src"
+    [[ $src =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid volume name: $src"
+  fi
+}
+
+[[ $# -gt 0 ]] || die "missing subcommand (try: $PROG run --help)"
+sub=$1
+shift
+
+case $sub in
+  system | service | machine | generate | play | kube | secret)
+    die "'$sub' is not permitted on ostrium-linux"
+    ;;
+  network | volume | pod | compose)
+    is_dev || die "'$sub' is only available on the dev image"
+    ;;
+esac
+
+case $sub in
+  ps | images | image | logs | inspect | rm | rmi | start | stop | kill | restart | stats | top | port | diff | history | version | info | healthcheck | events | wait | pause | unpause)
+    exec "$PODMAN_BIN" "$sub" "$@"
+    ;;
+  pull)
+    [[ $# -eq 1 ]] || die "pull takes exactly one image reference"
+    image=$1
+    registry_ok "$image" || die "registry not allowlisted: $image"
+    if ! is_dev && [[ $image != *@sha256:* ]]; then
+      die "pull by digest on the $MODE image: repo@sha256:..."
+    fi
+    exec "$PODMAN_BIN" pull "$image"
+    ;;
+  build)
+    is_dev || die "build is only available on the dev image"
+    ;;
+  run | create | exec | network | volume | pod | compose)
+    :
+    ;;
+  *)
+    die "subcommand '$sub' is not permitted (run, create, build, pull, exec, ps, images, logs, inspect, rm, stats)"
+    ;;
+esac
+
+FORBIDDEN=(
+  --privileged
+  --cap-add
+  --device
+  --device-cgroup-rule
+  --pid
+  --ipc
+  --uts
+  --cgroupns
+  --apparmor
+  --selinux-opt
+  --group-add
+  --env-host
+  --secret
+  --secret-file
+  --hooks-dir
+  --rootfs
+  --root
+  --uidmap
+  --gidmap
+  --subuidname
+  --subgidname
+  --cgroup-parent
+  --annotation
+  --annotation-file
+  --volumes-from
+  --pod-id-file
+  --authfile
+  --url
+  --connection
+  --remote
+  --runroot
+  --tmpdir
+  --storage-driver
+  --storage-opt
+  --cert-dir
+  --cidfile
+  --conmon-pidfile
+  --pidfile
+  --log-opt
+)
+
+args=("$@")
+n=${#args[@]}
+image=""
+net_mode=""
+
+for ((i = 0; i < n; i++)); do
+  arg=${args[i]}
+  key=${arg%%=*}
+
+  case $key in
+    --network | --net)
+      if [[ $arg == *=* ]]; then
+        val=${arg#*=}
+      else
+        ((i + 1 < n)) || die "missing value for $arg"
+        val=${args[i + 1]}
+        i=$((i + 1))
+      fi
+      if is_dev; then
+        case $val in
+          host | container:* | "") die "network mode not allowed: ${val:-<empty>}" ;;
+        esac
+        [[ $val =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "invalid network name: $val"
+      else
+        case $val in
+          none | private | slirp4netns | pasta) ;;
+          *) die "network mode not allowed on $MODE: ${val:-<empty>}" ;;
+        esac
+      fi
+      net_mode=$val
+      continue
+      ;;
+    --userns)
+      ((i + 1 < n)) || die "missing value for --userns"
+      val=${args[i + 1]}
+      i=$((i + 1))
+      case $val in
+        keep-id | keep-id:* | auto | auto:*) ;;
+        *) die "userns mode not allowed: $val" ;;
+      esac
+      continue
+      ;;
+    --userns=*)
+      val=${arg#*=}
+      case $val in
+        keep-id | keep-id:* | auto | auto:*) ;;
+        *) die "userns mode not allowed: $val" ;;
+      esac
+      continue
+      ;;
+    --volume | --mount | -v)
+      ((i + 1 < n)) || die "missing value for $arg"
+      check_volume "${args[i + 1]}"
+      i=$((i + 1))
+      continue
+      ;;
+    -v*)
+      check_volume "${arg#-v}"
+      continue
+      ;;
+    --volume=* | --mount=*)
+      check_volume "${arg#*=}"
+      continue
+      ;;
+    --security-opt)
+      ((i + 1 < n)) || die "missing value for --security-opt"
+      val=${args[i + 1]}
+      i=$((i + 1))
+      [[ $val == no-new-privileges ]] && continue
+      [[ $val == no-new-privileges ]] && continue
+      is_dev && [[ $val == label=disable ]] || die "security-opt not allowed: $val"
+      continue
+      ;;
+    --security-opt=*)
+      val=${arg#*=}
+      [[ $val == no-new-privileges ]] && continue
+      [[ $val == no-new-privileges ]] && continue
+      is_dev && [[ $val == label=disable ]] || die "security-opt not allowed: $val"
+      continue
+      ;;
+    --env-file)
+      ((i + 1 < n)) || die "missing value for --env-file"
+      check_env_file "${args[i + 1]}"
+      i=$((i + 1))
+      continue
+      ;;
+    --env-file=*)
+      check_env_file "${arg#*=}"
+      continue
+      ;;
+    --env | -e)
+      is_dev || die "environment injection is refused on the $MODE image"
+      ((i + 1 < n)) || die "missing value for $arg"
+      i=$((i + 1))
+      continue
+      ;;
+    --env-host | --env-host=*)
+      die "host environment injection is refused"
+      ;;
+    --env=*)
+      is_dev || die "environment injection is refused on the $MODE image"
+      continue
+      ;;
+    -e*)
+      is_dev || die "environment injection is refused on the $MODE image"
+      continue
+      ;;
+    --sysctl | --ulimit)
+      is_dev || die "$arg is refused on the $MODE image"
+      ((i + 1 < n)) || die "missing value for $arg"
+      i=$((i + 1))
+      continue
+      ;;
+    --sysctl=* | --ulimit=*)
+      is_dev || die "$arg is refused on the $MODE image"
+      continue
+      ;;
+  esac
+
+  for f in "${FORBIDDEN[@]}"; do
+    [[ $key == "$f" ]] && die "flag not allowed: $arg"
+  done
+
+  if ! is_dev; then
+    case $key in
+      --read-only | --memory | -m | --cpus | --pids-limit)
+        die "resource and rootfs flags are fixed on the $MODE image: $arg"
+        ;;
+    esac
+  fi
+
+  case $arg in
+    *docker.sock* | *podman.sock* | *containerd.sock* | *SSH_AUTH_SOCK* | */.ssh* | */.gnupg* | *id_rsa* | *id_ed25519*)
+      die "host key or socket reference: $arg"
+      ;;
+  esac
+
+  if [[ $sub == run || $sub == create ]] && [[ -z $image && $arg != -* ]]; then
+    image=$arg
+  fi
+
+  # Flags that take a separate value: skip it so it is not mistaken for the image.
+  if [[ $arg == -* && $arg != *=* ]]; then
+    case $arg in
+      --tmpfs | --name | --hostname | -h | --workdir | -w | --label | -l | --log-driver | --restart | --stop-signal | --stop-timeout | --tz | --umask | --cpus | --memory | -m | --pids-limit | --dns | --dns-search | --dns-option | --add-host | --mac-address | --ip | --ip6 | --network-alias | --link | --expose | -p | --publish | --pull | --platform | --arch | --os | --health-cmd | --health-interval | --health-retries | --health-timeout | --health-start-period | --entrypoint | --user | -u)
+        i=$((i + 1))
+        ;;
+    esac
+  fi
+done
+
+if [[ $sub == run || $sub == create ]]; then
+  [[ -n $image ]] || die "no image given"
+  registry_ok "$image" || die "registry not allowlisted: $image"
+  if ! is_dev && [[ $image != *@sha256:* ]]; then
+    die "image must be digest-pinned on the $MODE image: repo@sha256:..."
+  fi
+fi
+
+if [[ $sub == build ]]; then
+  for arg in "$@"; do
+    case $arg in
+      --network=host | --network=container:* | --secret* | --ssh* | -v* | --volume* | --mount*)
+        die "build flag not allowed: $arg"
+        ;;
+    esac
+    if [[ $arg == /* && $arg != *=* ]]; then
+      real=$(realpath -m -- "$arg")
+      [[ $real == "$WORKSPACE" || $real == "$WORKSPACE"/* || $real == /tmp || $real == /tmp/* ]] \
+        || die "build path outside $WORKSPACE: $arg"
+    fi
+  done
+fi
+
+hardened=(--userns=keep-id --security-opt no-new-privileges)
+
+if is_dev; then
+  hardened+=(
+    --cap-drop=all
+    --cap-add=CHOWN
+    --cap-add=DAC_OVERRIDE
+    --cap-add=FOWNER
+    --cap-add=SETGID
+    --cap-add=SETUID
+    --tmpfs /tmp:rw,exec,nosuid,nodev,size=256m
+    --pull=missing
+  )
+else
+  hardened+=(
+    --cap-drop=all
+    --read-only
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m
+    --pull=never
+  )
+fi
+
+hardened+=(--pids-limit=256 --memory=2g --cpus=2)
+
+default_net=none
+if is_dev; then
+  default_net=pasta
+fi
+[[ -n $net_mode ]] || hardened+=(--network="$default_net")
+
+if [[ $sub == run || $sub == create ]]; then
+  exec "$PODMAN_BIN" "$sub" "${hardened[@]}" "$@"
+fi
+
+exec "$PODMAN_BIN" "$sub" "$@"

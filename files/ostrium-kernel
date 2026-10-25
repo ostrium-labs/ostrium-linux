@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Select one of the kernel snapshots baked into the image.
+#
+# Each extra choice on ostrium.kernel.choices is built as a systemd-boot
+# specialisation. `bootctl set-default` flips the default entry; reboot applies.
+set -euo pipefail
+
+MAP=/etc/ostrium/kernel-map.json
+[[ -r $MAP ]] || {
+  echo "ostrium-kernel: $MAP is missing" >&2
+  exit 1
+}
+
+usage() {
+  echo "usage: ostrium-kernel list | current | set <lts|latest|testing>"
+}
+
+entries() {
+  bootctl list --json=short
+}
+
+case ${1:-} in
+  list)
+    jq -r '.versions | to_entries[] | " \(.key)\t\(.value)"' "$MAP"
+    ;;
+  current)
+    entries | jq -r '.[] | select((.isDefault // .is_default // false) == true) | "\(.title) [\(.linux)]"' | head -1
+    ;;
+  set)
+    name=${2:-}
+    [[ -n $name ]] || {
+      usage
+      exit 64
+    }
+    ver=$(jq -r --arg n "$name" '.versions[$n] // empty' "$MAP")
+    [[ -n $ver ]] || {
+      echo "ostrium-kernel: unknown kernel '$name'" >&2
+      exit 64
+    }
+    [[ $(id -u) -eq 0 ]] || {
+      echo "ostrium-kernel: run as root: sudo ostrium-kernel set $name" >&2
+      exit 1
+    }
+    id=$(entries | jq -r --arg v "$ver" '.[] | select((.linux // "") | contains($v)) | .id' | head -1)
+    [[ -n $id ]] || {
+      echo "ostrium-kernel: no boot entry contains kernel $ver" >&2
+      exit 1
+    }
+    bootctl set-default "$id"
+    echo "default boot entry -> $id ($name $ver); reboot to apply"
+    ;;
+  *)
+    usage
+    exit 64
+    ;;
+esac
