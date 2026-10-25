@@ -71,7 +71,8 @@
   systemd.services.ostrium-first-boot = {
     description = "Expire the shipped password exactly once";
     wantedBy = [ "multi-user.target" ];
-    after = [ "systemd-user-sessions.service" ];
+    # Run before logins are allowed so the shipped password cannot be used.
+    before = [ "systemd-user-sessions.service" ];
     unitConfig.ConditionPathExists = "!/var/lib/ostrium/.password-expired";
     serviceConfig = {
       Type = "oneshot";
