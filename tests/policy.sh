@@ -12,6 +12,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/bin" "$TMP/work/sub" "$TMP/work/.ssh" "$TMP/srv/data/x"
+touch "$TMP/work/env"
 cat > "$TMP/bin/podman" <<'EOF'
 #!/usr/bin/env bash
 printf 'PODMAN'
@@ -71,6 +72,8 @@ ok "dev runs tags"                  dev  '[--network=pasta]'                    
 ok "dev bind mount in workspace"    dev  '[-v]'                                   run -v "$TMP/work/sub:/app" docker.io/library/alpine:3
 ok "dev --mount in workspace"       dev  'PODMAN [run]'                           run --mount type=bind,src="$TMP/work",dst=/app docker.io/library/alpine:3
 ok "dev env"                        dev  'PODMAN [run]'                           run -e FOO=bar docker.io/library/alpine:3
+ok "dev env-file workspace"         dev  'PODMAN [run]'                           run --env-file "$TMP/work/env" docker.io/library/alpine:3
+no "dev env-file outside"           dev run --env-file ../../etc/passwd docker.io/library/alpine:3
 ok "dev label=disable"              dev  'PODMAN [run]'                           run --security-opt label=disable docker.io/library/alpine:3
 ok "dev compose"                    dev  'PODMAN [compose]'                       compose up -d
 ok "dev build"                      dev  'PODMAN [build]'                         build -t app .

@@ -22,8 +22,6 @@ PROG=${0##*/}
 PODMAN_BIN=${PODMAN_BIN:-podman}
 
 die() { printf '%s: refused: %s\n' "$PROG" "$*" >&2; exit 64; }
-note() { printf '%s: %s\n' "$PROG" "$*" >&2; }
-
 case $MODE in
   dev | compute | storage) ;;
   *) die "invalid MODE '$MODE' in /etc/ostrium/podman-policy.conf" ;;
@@ -67,10 +65,10 @@ registry_ok() {
 check_env_file() {
   local p=$1 real
   if is_dev; then
-    [[ $p == /* ]] || return 0
     real=$(realpath -m -- "$p")
     [[ $real == "$WORKSPACE" || $real == "$WORKSPACE"/* ]] \
       || die "env file outside $WORKSPACE: $p"
+    [[ -e $real ]] || die "env file does not exist: $p"
   else
     [[ $p == /etc/ostrium/env/* || $p == /run/ostrium/env/* ]] \
       || die "env files are only read from /etc/ostrium/env on the $MODE image"
