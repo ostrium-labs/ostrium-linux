@@ -38,7 +38,7 @@ clean:
 	rm -rf result result-* *.spdx.json *.cosign.bundle
 
 sbom:
-	nix shell nixpkgs#syft -c syft scan dir:result-$(VAR)-qcow2 -o spdx-json > $(BASE).spdx.json
+	nix shell --inputs-from . nixpkgs#syft -c syft scan dir:result-$(VAR)-qcow2 -o spdx-json > $(BASE).spdx.json
 
 sign: sbom
 	cosign sign-blob --yes --bundle $(BASE).cosign.bundle result-$(VAR)-qcow2/nixos.qcow2

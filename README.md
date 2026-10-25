@@ -152,7 +152,7 @@ multi-tenant isolation.
 | bind mounts | under `/home/ostrium/work` | **none** | under `/srv/data` |
 | named volumes | yes | no | no |
 | `--env` / `--env-file` | yes / workspace | no | no |
-| `compose`, `network`, `volume`, `pod` | yes | no | no |
+| `compose`, `network`, `volume` | yes | no | no |
 | `build` | yes | **no** | **no** |
 | rootfs | writable | read-only (fixed) | read-only (fixed) |
 | default network | `pasta` | `none` | `none` |
@@ -160,10 +160,11 @@ multi-tenant isolation.
 | pull policy | `missing` | `never` | `never` |
 
 Always refused on every variant: `--privileged`, `--cap-add`, `--device`,
-`--pid/--ipc/--uts/--cgroupns`, `--userns=host`, `--security-opt` (except
+`--pid/--ipc/--uts/--cgroupns`, `--pod`, `--userns=host`, `--security-opt` (except
 `label=disable` on dev), `--apparmor`, `--selinux-opt`, `--group-add`,
 `--env-host`, `--secret`, `--hooks-dir`, `--rootfs`, uid/gid remapping,
-`--volumes-from`, `--runtime`, `--preserve-fds`, auth/cert/log files, and any
+`--volumes-from`, `--runtime`, `--preserve-fds`, `--tls-verify`,
+`--signature-policy`, auth/cert/log files, and any
 path containing `.ssh`, `.gnupg`, `id_*`, `*.sock` or `SSH_AUTH_SOCK`.
 
 The wrapper also adds, before Podman sees the command:
@@ -209,9 +210,10 @@ ostrium-podman run -v /home/ostrium/work/app:/app docker.io/library/node:22
 podman-compose -f /etc/ostrium/dev-compose.yaml up -d
 ```
 
-`podman build` is accepted on the dev image only; a Containerfile can
-bind-mount host paths in `RUN --mount`, and that is not something the wrapper
-can inspect.
+`podman build` is accepted on the dev image only and must run from
+`/home/ostrium/work`; `--file`, `--build-context` and absolute context paths
+outside the workspace are refused. A Containerfile can still bind-mount host
+paths in `RUN --mount`, and that is not something the wrapper can inspect.
 
 Bypass attempts fail before Podman runs:
 
@@ -232,6 +234,14 @@ desktop app can start. Compose-created networks, named volumes, env vars and
 resolve inside `/home/ostrium/work`.
 
 ---
+
+## Hardening trade-offs
+
+`modules/hardening.nix` sets `mds=full,nosmt`, which disables SMT. That halves
+peak throughput on shared hosts; drop the parameter there if you accept the
+mitigation gap. Rootless Podman still needs unprivileged user namespaces
+(`security.allowUserNamespaces = true`), and the wrapper is a guard rail for the
+machine owner, not a sandbox against someone who already has a shell.
 
 ## Verification
 

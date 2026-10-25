@@ -33,7 +33,7 @@ policy() {
 }
 
 wrap() {
-  OSTRIUM_PODMAN_POLICY=$TMP/policy.conf PODMAN_BIN=$TMP/bin/podman "$WRAPPER" "$@"
+  ( cd "$TMP" && OSTRIUM_PODMAN_POLICY=$TMP/policy.conf PODMAN_BIN=$TMP/bin/podman "$WRAPPER" "$@" )
 }
 
 ok() {
@@ -74,10 +74,13 @@ ok "dev env"                        dev  'PODMAN [run]'                         
 ok "dev label=disable"              dev  'PODMAN [run]'                           run --security-opt label=disable docker.io/library/alpine:3
 ok "dev compose"                    dev  'PODMAN [compose]'                       compose up -d
 ok "dev build"                      dev  'PODMAN [build]'                         build -t app .
+ok "dev image build alias"          dev  'PODMAN [build]'                          image build -t app .
+ok "dev volume create"              dev  'PODMAN [volume] [create]'               volume create pgdata
 ok "dev overrides resources"        dev  '[--memory=4g]'                          run --memory=4g docker.io/library/alpine:3
 
 # compute: digest-only, no mounts/env/compose, fixed rootfs and resources.
 ok "compute pulls digest"           compute 'PODMAN [pull]'                      pull ghcr.io/ostrium-labs/worker@sha256:deadbeef
+ok "compute image pull digest"      compute 'PODMAN [pull]'                      image pull ghcr.io/ostrium-labs/worker@sha256:deadbeef
 ok "compute runs digest readonly"   compute '[--read-only]'                     run ghcr.io/ostrium-labs/worker@sha256:deadbeef
 ok "compute defaults to no net"     compute '[--network=none]'                   run ghcr.io/ostrium-labs/worker@sha256:deadbeef
 ok "compute allows private net"     compute '[--network=private]'               run --network=private ghcr.io/ostrium-labs/worker@sha256:deadbeef
@@ -87,7 +90,13 @@ no "compute bind mount"             compute run -v "$TMP/work:/app" ghcr.io/ostr
 no "compute env"                    compute run -e FOO=bar ghcr.io/ostrium-labs/worker@sha256:deadbeef
 no "compute compose"                compute compose up -d
 no "compute build"                  compute build -t app .
+no "volume driver binds host"       dev volume create -o device=/etc -o type=none -o o=bind etc
+no "build --file outside"           dev build --file=/etc/passwd .
+no "build --file outside (short)"   dev build -f ../../etc/passwd .
+no "build context outside"          dev build ../..
 no "compute resource override"      compute run --memory=8g ghcr.io/ostrium-labs/worker@sha256:deadbeef
+no "compute short memory override"  compute run -m8g ghcr.io/ostrium-labs/worker@sha256:deadbeef
+no "compute cgroup override"        compute run --cgroup-conf memory.max=8g ghcr.io/ostrium-labs/worker@sha256:deadbeef
 no "compute security-opt"           compute run --security-opt label=disable ghcr.io/ostrium-labs/worker@sha256:deadbeef
 no "compute env-file"               compute run --env-file /etc/passwd ghcr.io/ostrium-labs/worker@sha256:deadbeef
 
@@ -102,10 +111,15 @@ no "host network"                   dev run --network=host docker.io/library/alp
 no "host pid"                       dev run --pid=host docker.io/library/alpine:3
 no "userns host"                    dev run --userns=host docker.io/library/alpine:3
 no "device"                         dev run --device /dev/kvm docker.io/library/alpine:3
+no "relative bind source"           dev run --mount type=bind,src=work,dst=/x docker.io/library/alpine:3
+no "duplicate bind source"          dev run --mount "type=bind,src=$TMP/work,dst=/x,src=/etc" docker.io/library/alpine:3
 no "ssh key volume"                 dev run -v "$TMP/work/.ssh:/keys" docker.io/library/alpine:3
 no "docker socket"                  dev run -v /var/run/docker.sock:/var/run/docker.sock docker.io/library/alpine:3
 no "secret"                         dev run --secret id=x docker.io/library/alpine:3
 no "runtime"                        dev run --runtime=/tmp/podman/evil docker.io/library/alpine:3
+no "tls verify"                     dev run --tls-verify=false docker.io/library/alpine:3
+no "signature policy"               dev run --signature-policy=/tmp/policy.json docker.io/library/alpine:3
+no "pod subcommand"                 dev pod create --name p
 no "system service"                 dev system service
 no "non-allowlisted registry"       dev pull evil.example.com/library/x:1
 no "build with host mount"          dev build --volume "$TMP:/x" .

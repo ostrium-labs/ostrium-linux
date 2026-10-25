@@ -77,14 +77,8 @@ check_env_file() {
   fi
 }
 
-check_volume() {
-  local spec=$1 src real
-  # tmpfs mounts never touch the host filesystem.
-  [[ $spec == type=tmpfs* ]] && return 0
-  if [[ $spec == *type=bind* || $spec == *type=volume* ]]; then
-    src=$(printf '%s' "$spec" | tr ',' '\n' | sed -n 's/^\(src\|source\)=//p' | head -1)
-  fi
-  [[ -n ${src:-} ]] || src=${spec%%:*}
+check_source() {
+  local src=$1 real
   [[ -n $src ]] || return 0
 
   case $src in
@@ -108,15 +102,59 @@ check_volume() {
   fi
 }
 
+check_volume() {
+  local spec=$1 src found=0
+  # tmpfs mounts never touch the host filesystem.
+  [[ $spec == type=tmpfs* ]] && return 0
+  if ! is_dev && ! is_storage; then
+    die "mounts are refused on the $MODE image"
+  fi
+
+  if [[ $spec == *type=bind* || $spec == *type=volume* ]]; then
+    # Check every src/source occurrence; a duplicated key must not let the
+    # last (unchecked) value win inside podman.
+    while IFS= read -r src; do
+      [[ -n $src ]] || continue
+      found=1
+      if [[ $spec == *type=bind* && $src != /* ]]; then
+        die "bind source must be an absolute path: $src"
+      fi
+      check_source "$src"
+    done < <(printf '%s\n' "$spec" | tr ',' '\n' | sed -n 's/^\(src\|source\)=//p')
+    ((found)) && return 0
+  fi
+
+  check_source "${spec%%:*}"
+}
+
 [[ $# -gt 0 ]] || die "missing subcommand (try: $PROG run --help)"
 sub=$1
 shift
 
+# `podman image pull|build` are aliases for the top-level commands and must
+# go through the same checks. `image push|trust|scp` can move images or change
+# trust state outside the policy, so they are refused.
+if [[ $sub == image ]]; then
+  case ${1:-} in
+    pull)
+      sub=pull
+      shift
+      ;;
+    build)
+      sub=build
+      shift
+      ;;
+    push | trust | scp)
+      die "'podman image $1' is not permitted on ostrium-linux"
+      ;;
+  esac
+fi
+
 case $sub in
-  system | service | machine | generate | play | kube | secret)
+  system | service | machine | generate | play | kube | secret | pod)
     die "'$sub' is not permitted on ostrium-linux"
     ;;
-  network | volume | pod | compose)
+  network | volume | compose)
     is_dev || die "'$sub' is only available on the dev image"
     ;;
 esac
@@ -137,7 +175,7 @@ case $sub in
   build)
     is_dev || die "build is only available on the dev image"
     ;;
-  run | create | exec | network | volume | pod | compose)
+  run | create | exec | network | volume | compose)
     :
     ;;
   *)
@@ -187,6 +225,11 @@ FORBIDDEN=(
   --log-opt
   --runtime
   --preserve-fds
+  --tls-verify
+  --signature-policy
+  --decryption-key
+  --pod
+  --cgroup-conf
 )
 
 args=("$@")
@@ -312,7 +355,7 @@ for ((i = 0; i < n; i++)); do
 
   if ! is_dev; then
     case $key in
-      --read-only | --memory | -m | --cpus | --pids-limit)
+      --read-only | --memory | -m | -m* | --memory-swap | --cpus | --cpu-quota | --cpu-period | --pids-limit)
         die "resource and rootfs flags are fixed on the $MODE image: $arg"
         ;;
     esac
@@ -346,18 +389,66 @@ if [[ $sub == run || $sub == create ]]; then
   fi
 fi
 
-if [[ $sub == build ]]; then
+if [[ $sub == volume && ${1:-} == create ]]; then
   for arg in "$@"; do
+    case $arg in
+      -o | --opt | -o* | --opt*)
+        die "volume driver options are not allowed (they can bind host paths): $arg"
+        ;;
+    esac
+  done
+fi
+
+if [[ $sub == build ]]; then
+  cwd=$(pwd -P)
+  [[ $cwd == "$WORKSPACE" || $cwd == "$WORKSPACE"/* || $cwd == /tmp || $cwd == /tmp/* ]] \
+    || die "run podman build from $WORKSPACE"
+  check_build_path() {
+    local path=$1 real
+    [[ -n $path ]] || return 0
+    real=$(realpath -m -- "$path")
+    [[ $real == "$WORKSPACE" || $real == "$WORKSPACE"/* || $real == /tmp || $real == /tmp/* ]] \
+      || die "build path outside $WORKSPACE: $path"
+  }
+  barg=("$@")
+  bn=${#barg[@]}
+  for ((i = 0; i < bn; i++)); do
+    arg=${barg[i]}
     case $arg in
       --network=host | --network=container:* | --secret* | --ssh* | -v* | --volume* | --mount*)
         die "build flag not allowed: $arg"
         ;;
+      -f | --file | --ignorefile)
+        check_build_path "${barg[i + 1]:-}"
+        i=$((i + 1))
+        ;;
+      --file=* | --ignorefile=* | -f=*)
+        check_build_path "${arg#*=}"
+        ;;
+      -f*)
+        check_build_path "${arg#-f}"
+        ;;
+      --build-context=* | --build-context)
+        if [[ $arg == --build-context=* ]]; then
+          rest=${arg#*=}
+        else
+          rest=${barg[i + 1]:-}
+          i=$((i + 1))
+        fi
+        IFS=, read -ra pairs <<< "$rest"
+        for pair in "${pairs[@]}"; do
+          check_build_path "${pair#*=}"
+        done
+        ;;
+      /*)
+        check_build_path "$arg"
+        ;;
+      *)
+        if [[ $arg != -* && -d $arg ]]; then
+          check_build_path "$arg"
+        fi
+        ;;
     esac
-    if [[ $arg == /* && $arg != *=* ]]; then
-      real=$(realpath -m -- "$arg")
-      [[ $real == "$WORKSPACE" || $real == "$WORKSPACE"/* || $real == /tmp || $real == /tmp/* ]] \
-        || die "build path outside $WORKSPACE: $arg"
-    fi
   done
 fi
 
