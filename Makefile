@@ -3,12 +3,15 @@ VAR ?= compute
 VARIANTS = dev compute storage
 BASE = ostrium-linux-$(VAR)-$(ARCH)
 
-.PHONY: check format all clean verify sbom sign $(VARIANTS)
+.PHONY: check test format all clean verify sbom sign $(VARIANTS)
 
 # Evaluate every output for both architectures. qcow2/raw builds run a KVM
 # guest, so this stays evaluation-only; the image targets below do the builds.
 check:
 	nix flake check --no-build --all-systems -L
+
+test:
+	bash tests/policy.sh
 
 format:
 	nixfmt flake.nix modules/*.nix hosts/*.nix

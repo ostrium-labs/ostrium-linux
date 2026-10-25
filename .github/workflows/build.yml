@@ -23,6 +23,7 @@ jobs:
       # Evaluate every output (both architectures) without building the
       # systems twice; the image jobs below do the real builds.
       - run: nix flake check --no-build --all-systems -L
+      - run: bash tests/policy.sh
 
   image:
     needs: flake-check

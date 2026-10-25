@@ -163,8 +163,8 @@ Always refused on every variant: `--privileged`, `--cap-add`, `--device`,
 `--pid/--ipc/--uts/--cgroupns`, `--userns=host`, `--security-opt` (except
 `label=disable` on dev), `--apparmor`, `--selinux-opt`, `--group-add`,
 `--env-host`, `--secret`, `--hooks-dir`, `--rootfs`, uid/gid remapping,
-`--volumes-from`, auth/cert/log files, and any path containing `.ssh`,
-`.gnupg`, `id_*`, `*.sock` or `SSH_AUTH_SOCK`.
+`--volumes-from`, `--runtime`, `--preserve-fds`, auth/cert/log files, and any
+path containing `.ssh`, `.gnupg`, `id_*`, `*.sock` or `SSH_AUTH_SOCK`.
 
 The wrapper also adds, before Podman sees the command:
 
@@ -184,8 +184,9 @@ ghcr.io/ostrium-labs/   docker.io/library/   quay.io/
 registry.fedoraproject.org/   gcr.io/distroless/
 ```
 
-`/etc/containers/policy.json` rejects unsigned images and trusts
-`ghcr.io/ostrium-labs` via `/etc/ostrium/cosign.pub`. Compute/storage disable
+`/etc/containers/policy.json` rejects every registry that is not explicitly
+listed and requires a signature for `ghcr.io/ostrium-labs` via
+`/etc/ostrium/cosign.pub`. Compute/storage disable
 short-name resolution entirely (`unqualified-search-registries = []`,
 `short-name-mode = "enforcing"`).
 
@@ -236,6 +237,7 @@ resolve inside `/home/ostrium/work`.
 
 ```bash
 make check                     # evaluate all outputs, both architectures
+make test                      # wrapper policy regression tests
 nix build .#packages.x86_64-linux.compute-qcow2 -L   # needs /dev/kvm
 qemu-img info result/nixos.qcow2
 ```
@@ -275,4 +277,5 @@ files/ostrium-podman          the deny-by-default wrapper
 files/ostrium-kernel          kernel snapshot selector
 files/ostrium-control         TUI panel
 files/dev-compose.yaml        example stack for the desktop app
+tests/policy.sh               wrapper policy regression tests
 ```

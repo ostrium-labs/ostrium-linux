@@ -185,6 +185,8 @@ FORBIDDEN=(
   --conmon-pidfile
   --pidfile
   --log-opt
+  --runtime
+  --preserve-fds
 )
 
 args=("$@")
@@ -256,13 +258,11 @@ for ((i = 0; i < n; i++)); do
       val=${args[i + 1]}
       i=$((i + 1))
       [[ $val == no-new-privileges ]] && continue
-      [[ $val == no-new-privileges ]] && continue
       is_dev && [[ $val == label=disable ]] || die "security-opt not allowed: $val"
       continue
       ;;
     --security-opt=*)
       val=${arg#*=}
-      [[ $val == no-new-privileges ]] && continue
       [[ $val == no-new-privileges ]] && continue
       is_dev && [[ $val == label=disable ]] || die "security-opt not allowed: $val"
       continue
