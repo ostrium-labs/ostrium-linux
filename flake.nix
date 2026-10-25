@@ -31,7 +31,24 @@
 
       mkSystem = system: host: nixpkgs.lib.nixosSystem {
         inherit system;
-        modules = [ host ];
+        modules = [
+          host
+          # cptofs starts its LKL kernel with a hard-coded 100 MiB of RAM. The
+          # compute image carries three kernels and their initrds, and cptofs
+          # panics with an out-of-memory kernel log at that size. Raise the LKL
+          # heap for the image builder only.
+          {
+            nixpkgs.overlays = [
+              (final: prev: {
+                lkl = prev.lkl.overrideAttrs (old: {
+                  postPatch = (old.postPatch or "") + ''
+                    sed -i 's/"mem=100M"/"mem=2048M"/' tools/lkl/cptofs.c
+                  '';
+                });
+              })
+            ];
+          }
+        ];
       };
 
       # NixOS's make-disk-image only allows ext4 with a partition table, so the
