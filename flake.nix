@@ -48,6 +48,9 @@
           diskSize = sys.config.virtualisation.diskSize;
           # Three kernels plus specialisations must fit on the ESP.
           bootSize = "512M";
+          # cptofs needs host RAM for the closure; the default 1 GiB OOMs on
+          # the compute image with three kernels.
+          memSize = 4096;
         };
 
       mkIso = system: host: nixos-generators.nixosGenerate {
