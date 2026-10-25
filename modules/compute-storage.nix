@@ -29,7 +29,6 @@ in
       set -eu
       img=/var/lib/ostrium/containers.img
       install -d -m 0755 /var/lib/ostrium
-      install -d -m 0755 -o ostrium -g users /home/ostrium
       install -d -m 0700 -o ostrium -g users ${mount}
       if [ ! -s "$img" ]; then
         truncate -s ${cfg.containerDiskSize} "$img"
