@@ -46,6 +46,8 @@
           inherit format;
           partitionTableType = "efi";
           diskSize = sys.config.virtualisation.diskSize;
+          # Three kernels plus specialisations must fit on the ESP.
+          bootSize = "512M";
         };
 
       mkIso = system: host: nixos-generators.nixosGenerate {
