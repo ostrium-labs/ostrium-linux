@@ -95,7 +95,8 @@ system). It reads the same `kernel-map.json`, so the toggle is just
 version.
 
 `dev` ships only the latest kernel and `storage` only LTS; on those images the
-kernel menu says so.
+kernel menu says so. If `latest` and `testing` resolve to the same upstream
+version, either name selects the same boot entry.
 
 ---
 
